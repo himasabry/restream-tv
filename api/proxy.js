@@ -1,8 +1,19 @@
 export default async function handler(req, res) {
   try {
-    const targetUrl =
-      `http://olivia.hidencloud.com:24651${req.url.replace(/^\/api\/proxy/, '')}`;
+    const url = new URL(req.url);
 
+    // إزالة /api/proxy من المسار
+    let pathname = url.pathname.replace(/^\/api\/proxy/, "");
+
+    if (!pathname.startsWith("/")) {
+      pathname = "/" + pathname;
+    }
+
+    // السيرفر الأصلي
+    const targetUrl =
+      `http://olivia.hidencloud.com:24651${pathname}${url.search}`;
+
+    // نسخ Headers الطلب
     const headers = new Headers();
 
     for (const [key, value] of Object.entries(req.headers)) {
@@ -11,30 +22,69 @@ export default async function handler(req, res) {
       }
     }
 
-    const response = await fetch(targetUrl, {
+    // طلب السيرفر الأصلي
+    const upstream = await fetch(targetUrl, {
       method: req.method,
       headers,
       redirect: "follow"
     });
 
-    res.status(response.status);
+    // CORS
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Origin, X-Requested-With, Content-Type, Accept, Range, User-Agent"
+    );
 
-    response.headers.forEach((value, key) => {
-      res.setHeader(key, value);
+    if (req.method === "OPTIONS") {
+      res.statusCode = 204;
+      return res.end();
+    }
+
+    res.statusCode = upstream.status;
+
+    // نسخ Headers الاستجابة
+    upstream.headers.forEach((value, key) => {
+      const blocked = [
+        "connection",
+        "keep-alive",
+        "transfer-encoding"
+      ];
+
+      if (!blocked.includes(key.toLowerCase())) {
+        res.setHeader(key, value);
+      }
     });
 
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    // Streaming
+    if (!upstream.body) {
+      return res.end();
+    }
 
-    const body = Buffer.from(await response.arrayBuffer());
+    const reader = upstream.body.getReader();
 
-    res.send(body);
+    while (true) {
+      const { done, value } = await reader.read();
+
+      if (done) break;
+
+      res.write(Buffer.from(value));
+    }
+
+    res.end();
 
   } catch (error) {
-    console.error(error);
+    console.error("Proxy Error:", error);
 
-    res.status(500).json({
-      error: "Proxy error",
-      message: error.message
-    });
+    res.statusCode = 500;
+    res.setHeader("Content-Type", "application/json");
+
+    res.end(
+      JSON.stringify({
+        error: "Proxy Error",
+        message: error.message
+      })
+    );
   }
 }
