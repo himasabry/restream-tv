@@ -1,19 +1,21 @@
 export default async function handler(req, res) {
   try {
-    const url = new URL(req.url);
+    const requestUrl = new URL(req.url);
 
-    // إزالة /api/proxy من المسار
-    let pathname = url.pathname.replace(/^\/api\/proxy/, "");
+    let path = requestUrl.searchParams.get("path") || "/";
 
-    if (!pathname.startsWith("/")) {
-      pathname = "/" + pathname;
+    if (!path.startsWith("/")) {
+      path = "/" + path;
     }
 
-    // السيرفر الأصلي
-    const targetUrl =
-      `http://olivia.hidencloud.com:24651${pathname}${url.search}`;
+    // إزالة path من الـ Query حتى لا يتم إرساله للسيرفر الأصلي
+    requestUrl.searchParams.delete("path");
 
-    // نسخ Headers الطلب
+    const query = requestUrl.search;
+
+    const targetUrl =
+      `http://olivia.hidencloud.com:24651${path}${query}`;
+
     const headers = new Headers();
 
     for (const [key, value] of Object.entries(req.headers)) {
@@ -22,47 +24,56 @@ export default async function handler(req, res) {
       }
     }
 
-    // طلب السيرفر الأصلي
-    const upstream = await fetch(targetUrl, {
+    const options = {
       method: req.method,
       headers,
       redirect: "follow"
-    });
+    };
 
-    // CORS
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
-    res.setHeader(
-      "Access-Control-Allow-Headers",
-      "Origin, X-Requested-With, Content-Type, Accept, Range, User-Agent"
-    );
-
-    if (req.method === "OPTIONS") {
-      res.statusCode = 204;
-      return res.end();
+    if (
+      req.method !== "GET" &&
+      req.method !== "HEAD" &&
+      req.method !== "OPTIONS" &&
+      req.body
+    ) {
+      options.body = req.body;
     }
 
-    res.statusCode = upstream.status;
+    const response = await fetch(targetUrl, options);
 
-    // نسخ Headers الاستجابة
-    upstream.headers.forEach((value, key) => {
-      const blocked = [
-        "connection",
-        "keep-alive",
-        "transfer-encoding"
-      ];
+    res.statusCode = response.status;
 
-      if (!blocked.includes(key.toLowerCase())) {
+    response.headers.forEach((value, key) => {
+      if (
+        ![
+          "connection",
+          "keep-alive",
+          "transfer-encoding"
+        ].includes(key.toLowerCase())
+      ) {
         res.setHeader(key, value);
       }
     });
 
-    // Streaming
-    if (!upstream.body) {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader(
+      "Access-Control-Allow-Methods",
+      "GET, HEAD, POST, OPTIONS"
+    );
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "*"
+    );
+
+    if (req.method === "OPTIONS") {
       return res.end();
     }
 
-    const reader = upstream.body.getReader();
+    if (!response.body) {
+      return res.end();
+    }
+
+    const reader = response.body.getReader();
 
     while (true) {
       const { done, value } = await reader.read();
@@ -75,16 +86,14 @@ export default async function handler(req, res) {
     res.end();
 
   } catch (error) {
-    console.error("Proxy Error:", error);
+    console.error(error);
 
     res.statusCode = 500;
     res.setHeader("Content-Type", "application/json");
 
-    res.end(
-      JSON.stringify({
-        error: "Proxy Error",
-        message: error.message
-      })
-    );
+    res.end(JSON.stringify({
+      error: "Proxy Error",
+      message: error.message
+    }));
   }
 }
