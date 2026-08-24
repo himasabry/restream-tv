@@ -20,7 +20,7 @@ export default async function handler(req, res) {
 
     // السيرفر الأصلي
     const targetUrl =
-      `http://olivia.hidencloud.com:24651${path}${query}`;
+      `https://abdallasaed98-aboud-streem.hf.space${path}${query}`;
 
     console.log("Proxy Target:", targetUrl);
 
